@@ -53,19 +53,9 @@ namespace Google.PowerShell.CloudStorage
 
         public void Close()
         {
-<<<<<<< HEAD
             // StreamReader on .NET Core does not have Close method so we
             // have to call Dispose() instead.
             _stream.Dispose();
-=======
-#if !CORECLR
-            _stream.Close();
-#else
-            // StreamReader on .NET Core does not have Close method so we
-            // have to call Dispose() instead.
-            _stream.Dispose();
-#endif
->>>>>>> Initial check-in for .net core build
         }
     }
 }
