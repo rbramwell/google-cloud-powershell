@@ -5,14 +5,16 @@ using System.Collections.Generic;
 using System;
 using System.Linq;
 using System.Management.Automation;
+using System.Collections;
+using System.Text;
 
 namespace Google.PowerShell.PubSub
 {
-    public class GcPubSubCmdlet : GCloudCmdlet
+    public class GcpsCmdlet : GCloudCmdlet
     {
         public PubsubService Service { get; private set; }
 
-        public GcPubSubCmdlet()
+        public GcpsCmdlet()
         {
             Service = new PubsubService(GetBaseClientServiceInitializer());
         }
@@ -40,10 +42,18 @@ namespace Google.PowerShell.PubSub
             }
             return subscriptionName;
         }
+
+        /// <summary>
+        /// Converts a hashtable to a dictionary
+        /// </summary>
+        protected static Dictionary<K, V> ConvertToDictionary<K, V>(Hashtable hashTable)
+        {
+            return hashTable.Cast<DictionaryEntry>().ToDictionary(kvp => (K)kvp.Key, kvp => (V)kvp.Value);
+        }
     }
 
-    [Cmdlet(VerbsCommon.New, "GcPubSubTopic")]
-    public class NewGcPubSubTopic : GcPubSubCmdlet
+    [Cmdlet(VerbsCommon.New, "GcpsTopic")]
+    public class NewGcpsTopic : GcpsCmdlet
     {
         /// <summary>
         /// <para type="description">
@@ -56,6 +66,7 @@ namespace Google.PowerShell.PubSub
         public string Project { get; set; }
 
         [Parameter(Mandatory = true)]
+        [Alias("Topic")]
         public string[] Name { get; set; }
 
         protected override void ProcessRecord()
@@ -71,8 +82,8 @@ namespace Google.PowerShell.PubSub
         }
     }
 
-    [Cmdlet(VerbsCommon.Get, "GcPubSubTopic")]
-    public class GetGcPubSubTopic : GcPubSubCmdlet
+    [Cmdlet(VerbsCommon.Get, "GcpsTopic")]
+    public class GetGcpsTopic : GcpsCmdlet
     {
         /// <summary>
         /// <para type="description">
@@ -86,6 +97,7 @@ namespace Google.PowerShell.PubSub
 
         [Parameter(Mandatory = false)]
         [ValidateNotNullOrEmpty]
+        [Alias("Topic")]
         public string[] Name { get; set; }
 
         protected override void ProcessRecord()
@@ -117,8 +129,8 @@ namespace Google.PowerShell.PubSub
         }
     }
 
-    [Cmdlet(VerbsCommon.Remove, "GcPubSubTopic")]
-    public class RemoveGcPubSubTopic : GcPubSubCmdlet
+    [Cmdlet(VerbsCommon.Remove, "GcpsTopic")]
+    public class RemoveGcpsTopic : GcpsCmdlet
     {
         /// <summary>
         /// <para type="description">
@@ -131,6 +143,7 @@ namespace Google.PowerShell.PubSub
         public string Project { get; set; }
 
         [Parameter(Mandatory = true, ValueFromPipelineByPropertyName = true)]
+        [Alias("Topic")]
         public string[] Name { get; set; }
 
         protected override void ProcessRecord()
@@ -144,8 +157,102 @@ namespace Google.PowerShell.PubSub
         }
     }
 
-    [Cmdlet(VerbsCommon.Get, "GcPubSubSubscription", DefaultParameterSetName = ParameterSetNames.Default)]
-    public class GetGcPubSubSubscription : GcPubSubCmdlet
+    [Cmdlet(VerbsCommon.New, "GcpsMessage")]
+    public class NewGcpsMessage : GcpsCmdlet
+    {
+        [Parameter(Mandatory = false)]
+        [ValidateNotNullOrEmpty]
+        public string Data { get; set; }
+
+        [Parameter(Mandatory = false)]
+        [ValidateNotNullOrEmpty]
+        public Hashtable Attributes { get; set; }
+
+        protected override void ProcessRecord()
+        {
+            PubsubMessage psMessage = ConstructPubSubMessage(Data, Attributes);
+            WriteObject(psMessage);
+        }
+
+        internal static PubsubMessage ConstructPubSubMessage(string data, Hashtable attributes)
+        {
+            Dictionary<string, string> attributesDict = null;
+            string base64EncodedMessage = null;
+            if (attributes != null && attributes.Count > 0)
+            {
+                attributesDict = ConvertToDictionary<string, string>(attributes);
+            }
+            if (!string.IsNullOrWhiteSpace(data))
+            {
+                base64EncodedMessage = Convert.ToBase64String(Encoding.UTF8.GetBytes(data));
+            }
+            // A valid PubSub message must have either a non-empty message or a non-empty attributes.
+            if (attributesDict == null && base64EncodedMessage == null)
+            {
+                throw new ArgumentException("Cannot construct a PubSub message because both the message and the attributes are empty.");
+            }
+            PubsubMessage psMessage = new PubsubMessage() { Data = base64EncodedMessage, Attributes = attributesDict };
+            return psMessage;
+        }
+    }
+
+    [Cmdlet(VerbsData.Publish, "GcpsMessage", DefaultParameterSetName = ParameterSetNames.DataAndAttributes)]
+    public class PublishGcpsMessage : GcpsCmdlet
+    {
+        private class ParameterSetNames
+        {
+            public const string DataAndAttributes = "DataAndAttributes";
+            public const string Message = "Message";
+        }
+
+        /// <summary>
+        /// <para type="description">
+        /// The project to check for log entries. If not set via PowerShell parameter processing, will
+        /// default to the Cloud SDK's DefaultProject property.
+        /// </para>
+        /// </summary>
+        [Parameter(Mandatory = false)]
+        [ConfigPropertyName(CloudSdkSettings.CommonProperties.Project)]
+        public string Project { get; set; }
+
+        [Parameter(Mandatory = true, Position = 0)]
+        [ValidateNotNullOrEmpty]
+        public string Topic { get; set; }
+
+        [Parameter(Mandatory = false, ParameterSetName = ParameterSetNames.DataAndAttributes)]
+        [ValidateNotNullOrEmpty]
+        public string Data { get; set; }
+
+        [Parameter(Mandatory = false, ParameterSetName = ParameterSetNames.DataAndAttributes)]
+        [ValidateNotNullOrEmpty]
+        public Hashtable Attributes { get; set; }
+
+        [Parameter(Mandatory = true, ParameterSetName = ParameterSetNames.Message)]
+        [ValidateNotNullOrEmpty]
+        public PubsubMessage[] Message { get; set; }
+
+        protected override void ProcessRecord()
+        {
+            Topic = PrefixProjectToTopic(Topic, Project);
+            PublishRequest requestBody = null;
+            if (ParameterSetName == ParameterSetNames.DataAndAttributes)
+            {
+                PubsubMessage psMessage = NewGcpsMessage.ConstructPubSubMessage(Data, Attributes);
+                requestBody = new PublishRequest() { Messages = new List<PubsubMessage>() { psMessage } };
+            }
+            else
+            {
+                requestBody = new PublishRequest() { Messages = Message };
+            }
+            ProjectsResource.TopicsResource.PublishRequest publishRequest = Service.Projects.Topics.Publish(requestBody, Topic);
+            PublishResponse response = publishRequest.Execute();
+
+            WriteObject(response.MessageIds, true);
+        }
+    }
+
+    [Cmdlet(VerbsCommon.Get, "GcpsSubscription", DefaultParameterSetName = ParameterSetNames.Default)]
+    public class GetGcpsSubscription : GcpsCmdlet
     {
         private class ParameterSetNames
         {
@@ -227,6 +334,86 @@ namespace Google.PowerShell.PubSub
                 Subscription subscription = getRequest.Execute();
                 WriteObject(subscription);
             }
+        }
+    }
+
+    [Cmdlet(VerbsCommon.New, "GcpsSubscription", DefaultParameterSetName = ParameterSetNames.Default)]
+    public class NewGcpsSubscription : GcpsCmdlet
+    {
+        private class ParameterSetNames
+        {
+            public const string DeletedTopic = "DeletedTopic";
+            public const string Default = "Default";
+        }
+
+        /// <summary>
+        /// <para type="description">
+        /// The project to check for log entries. If not set via PowerShell parameter processing, will
+        /// default to the Cloud SDK's DefaultProject property.
+        /// </para>
+        /// </summary>
+        [Parameter(Mandatory = false)]
+        [ConfigPropertyName(CloudSdkSettings.CommonProperties.Project)]
+        public string Project { get; set; }
+
+        [Parameter(Mandatory = false)]
+        [ValidateNotNullOrEmpty]
+        public string Name { get; set; }
+
+        [Parameter(Mandatory = false)]
+        public int? AckDeadLine { get; set; }
+
+        [Parameter(Mandatory = false)]
+        [ValidateNotNullOrEmpty]
+        public string PushEndPoint { get; set; }
+
+        [Parameter(Mandatory = false)]
+        [ValidateNotNull]
+        public Hashtable PushEndPointAttributes { get; set; }
+
+        [Parameter(Mandatory = true, ParameterSetName = ParameterSetNames.Default)]
+        [ValidateNotNullOrEmpty]
+        public string Topic { get; set; }
+
+        [Parameter(Mandatory = true, ParameterSetName = ParameterSetNames.DeletedTopic)]
+        public SwitchParameter DeletedTopic { get; set; }
+
+        protected override void ProcessRecord()
+        {
+            if (ParameterSetName == ParameterSetNames.DeletedTopic)
+            {
+                // To get subscription from deleted topic, set the value of Topic to _deleted-topic_.
+                Topic = "_deleted-topic_";
+            }
+            if (ParameterSetName == ParameterSetNames.Default)
+            {
+                Topic = PrefixProjectToTopic(Topic, Project);
+            }
+            Name = PrefixProjectToSubscription(Name, Project);
+
+            Subscription subscriptionBody = new Subscription()
+            {
+                Name = Name,
+                Topic = Topic
+            };
+
+            if (AckDeadLine.HasValue)
+            {
+                subscriptionBody.AckDeadlineSeconds = AckDeadLine.Value;
+            }
+            if (PushEndPoint != null)
+            {
+                PushConfig pushConfig = new PushConfig() { PushEndpoint = PushEndPoint };
+                if (PushEndPointAttributes != null && PushEndPointAttributes.Count > 0)
+                {
+                    pushConfig.Attributes = ConvertToDictionary<string, string>(PushEndPointAttributes);
+                }
+            }
+
+            ProjectsResource.SubscriptionsResource.CreateRequest request =
+                Service.Projects.Subscriptions.Create(subscriptionBody, Name);
+            Subscription response = request.Execute();
+            WriteObject(response);
         }
     }
 }
