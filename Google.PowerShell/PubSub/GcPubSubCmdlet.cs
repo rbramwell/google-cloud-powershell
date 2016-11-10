@@ -251,6 +251,94 @@ namespace Google.PowerShell.PubSub
         }
     }
 
+    [Cmdlet(VerbsCommon.Get, "GcpsMessage")]
+    public class GetGcpsMessage : GcpsCmdlet
+    {
+        private class PubSubMessageWithAckId : PubsubMessage
+        {
+            public PubSubMessageWithAckId() : base() { }
+
+            public PubSubMessageWithAckId(ReceivedMessage receivedMessage)
+            {
+                AckId = receivedMessage.AckId;
+                if (receivedMessage.Message != null)
+                {
+                    Attributes = receivedMessage.Message.Attributes;
+                    Data = receivedMessage.Message.Data;
+                    ETag = receivedMessage.Message.ETag;
+                    MessageId = receivedMessage.Message.MessageId;
+                    PublishTime = receivedMessage.Message.PublishTime;
+                }
+            }
+
+            public string AckId { get; set; }
+        }
+
+        /// <summary>
+        /// <para type="description">
+        /// The project to check for log entries. If not set via PowerShell parameter processing, will
+        /// default to the Cloud SDK's DefaultProject property.
+        /// </para>
+        /// </summary>
+        [Parameter(Mandatory = false)]
+        [ConfigPropertyName(CloudSdkSettings.CommonProperties.Project)]
+        public string Project { get; set; }
+
+        [Parameter(Mandatory = true, Position = 0, ValueFromPipelineByPropertyName = true)]
+        [Alias("Subscription")]
+        [ValidateNotNullOrEmpty]
+        public string Name { get; set; }
+
+        [Parameter(Mandatory = false)]
+        public int? MaxMessages { get; set; }
+
+        [Parameter(Mandatory = false)]
+        public SwitchParameter AutoAck { get; set; }
+
+        protected override void ProcessRecord()
+        {
+            Name = PrefixProjectToSubscription(Name, Project);
+            PullRequest requestBody = new PullRequest() { ReturnImmediately = true, MaxMessages = 100 };
+            if (MaxMessages.HasValue)
+            {
+                requestBody.MaxMessages = MaxMessages;
+            }
+
+            ProjectsResource.SubscriptionsResource.PullRequest request = Service.Projects.Subscriptions.Pull(requestBody, Name);
+            PullResponse response = request.Execute();
+            IList<ReceivedMessage> receivedMessages = response.ReceivedMessages;
+
+            if (receivedMessages == null || receivedMessages.Count == 0)
+            {
+                return;
+            }
+
+            if (AutoAck.IsPresent)
+            {
+                AcknowledgeRequest ackRequestBody = new AcknowledgeRequest()
+                {
+                    AckIds = receivedMessages.Select(message => message.AckId).ToList()
+                };
+                ProjectsResource.SubscriptionsResource.AcknowledgeRequest ackRequest =
+                    Service.Projects.Subscriptions.Acknowledge(ackRequestBody, Name);
+                ackRequest.Execute();
+            }
+
+            foreach (ReceivedMessage receivedMessage in receivedMessages)
+            {
+                PubSubMessageWithAckId messageWithAck = new PubSubMessageWithAckId(receivedMessage);
+                byte[] base64Bytes = Convert.FromBase64String(messageWithAck.Data);
+                messageWithAck.Data = Encoding.UTF8.GetString(base64Bytes);
+                if (AutoAck.IsPresent)
+                {
+                    // Remove the AckId 
+                    messageWithAck.AckId = null;
+                }
+                WriteObject(messageWithAck);
+            }
+        }
+    }
+
     [Cmdlet(VerbsCommon.Get, "GcpsSubscription", DefaultParameterSetName = ParameterSetNames.Default)]
     public class GetGcpsSubscription : GcpsCmdlet
     {
@@ -272,6 +360,7 @@ namespace Google.PowerShell.PubSub
 
         [Parameter(Mandatory = false, ParameterSetName = ParameterSetNames.Default)]
         [ValidateNotNullOrEmpty]
+        [Alias("Subscription")]
         public string[] Name { get; set; }
 
         [Parameter(Mandatory = true, ParameterSetName = ParameterSetNames.ByTopic)]
@@ -358,6 +447,7 @@ namespace Google.PowerShell.PubSub
 
         [Parameter(Mandatory = false)]
         [ValidateNotNullOrEmpty]
+        [Alias("Subscription")]
         public string Name { get; set; }
 
         [Parameter(Mandatory = false)]
@@ -414,6 +504,32 @@ namespace Google.PowerShell.PubSub
                 Service.Projects.Subscriptions.Create(subscriptionBody, Name);
             Subscription response = request.Execute();
             WriteObject(response);
+        }
+    }
+
+    [Cmdlet(VerbsCommon.Remove, "GcpsSubscription")]
+    public class RemoveGcpsSubscription : GcpsCmdlet
+    {
+        /// <summary>
+        /// <para type="description">
+        /// The project to check for log entries. If not set via PowerShell parameter processing, will
+        /// default to the Cloud SDK's DefaultProject property.
+        /// </para>
+        /// </summary>
+        [Parameter(Mandatory = false)]
+        [ConfigPropertyName(CloudSdkSettings.CommonProperties.Project)]
+        public string Project { get; set; }
+
+        [Parameter(Mandatory = false, ValueFromPipelineByPropertyName = true, ValueFromPipeline = true)]
+        [ValidateNotNullOrEmpty]
+        [Alias("Subscription")]
+        public string Name { get; set; }
+
+        protected override void ProcessRecord()
+        {
+            string subscriptionName = PrefixProjectToSubscription(Name, Project);
+            ProjectsResource.SubscriptionsResource.DeleteRequest request = Service.Projects.Subscriptions.Delete(subscriptionName);
+            request.Execute();
         }
     }
 }
