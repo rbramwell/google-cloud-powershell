@@ -258,8 +258,9 @@ namespace Google.PowerShell.PubSub
         {
             public PubSubMessageWithAckId() : base() { }
 
-            public PubSubMessageWithAckId(ReceivedMessage receivedMessage)
+            public PubSubMessageWithAckId(ReceivedMessage receivedMessage, string subscription)
             {
+                Subscription = subscription;
                 AckId = receivedMessage.AckId;
                 if (receivedMessage.Message != null)
                 {
@@ -272,6 +273,7 @@ namespace Google.PowerShell.PubSub
             }
 
             public string AckId { get; set; }
+            public string Subscription { get; set; }
         }
 
         /// <summary>
@@ -326,7 +328,7 @@ namespace Google.PowerShell.PubSub
 
             foreach (ReceivedMessage receivedMessage in receivedMessages)
             {
-                PubSubMessageWithAckId messageWithAck = new PubSubMessageWithAckId(receivedMessage);
+                PubSubMessageWithAckId messageWithAck = new PubSubMessageWithAckId(receivedMessage, Name);
                 byte[] base64Bytes = Convert.FromBase64String(messageWithAck.Data);
                 messageWithAck.Data = Encoding.UTF8.GetString(base64Bytes);
                 if (AutoAck.IsPresent)
@@ -336,6 +338,44 @@ namespace Google.PowerShell.PubSub
                 }
                 WriteObject(messageWithAck);
             }
+        }
+    }
+
+    [Cmdlet(VerbsCommunications.Send, "GcpsAck")]
+    public class SendGcpsAck : GcpsCmdlet
+    {
+        private class ParameterSetNames
+        {
+            public const string PubSubMessageWithAckId = "PubSubMessageWithAckId";
+            public const string Message = "Message";
+        }
+
+        /// <summary>
+        /// <para type="description">
+        /// The project to check for log entries. If not set via PowerShell parameter processing, will
+        /// default to the Cloud SDK's DefaultProject property.
+        /// </para>
+        /// </summary>
+        [Parameter(Mandatory = false)]
+        [ConfigPropertyName(CloudSdkSettings.CommonProperties.Project)]
+        public string Project { get; set; }
+
+        [Parameter(Mandatory = true, Position = 0)]
+        [Alias("Subscription")]
+        [ValidateNotNullOrEmpty]
+        public string Name { get; set; }
+
+        [Parameter(Mandatory = true, ValueFromPipelineByPropertyName = true)]
+        [ValidateNotNullOrEmpty]
+        public string[] AckIds { get; set; }
+
+        protected override void ProcessRecord()
+        {
+            Name = PrefixProjectToSubscription(Name, Project);
+            AcknowledgeRequest requestBody = new AcknowledgeRequest() { AckIds = AckIds.ToList() };
+            ProjectsResource.SubscriptionsResource.AcknowledgeRequest request =
+                Service.Projects.Subscriptions.Acknowledge(requestBody, Name);
+            request.Execute();
         }
     }
 
@@ -520,7 +560,7 @@ namespace Google.PowerShell.PubSub
         [ConfigPropertyName(CloudSdkSettings.CommonProperties.Project)]
         public string Project { get; set; }
 
-        [Parameter(Mandatory = false, ValueFromPipelineByPropertyName = true, ValueFromPipeline = true)]
+        [Parameter(Mandatory = false, ValueFromPipelineByPropertyName = true)]
         [ValidateNotNullOrEmpty]
         [Alias("Subscription")]
         public string Name { get; set; }
