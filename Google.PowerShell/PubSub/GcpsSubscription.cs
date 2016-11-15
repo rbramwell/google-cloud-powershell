@@ -8,15 +8,9 @@ using System.Management.Automation;
 
 namespace Google.PowerShell.PubSub
 {
-    [Cmdlet(VerbsCommon.Get, "GcpsSubscription", DefaultParameterSetName = ParameterSetNames.Default)]
+    [Cmdlet(VerbsCommon.Get, "GcpsSubscription")]
     public class GetGcpsSubscription : GcpsCmdlet
     {
-        private class ParameterSetNames
-        {
-            public const string ByTopic = "ByTopic";
-            public const string Default = "Default";
-        }
-
         /// <summary>
         /// <para type="description">
         /// The project to check for log entries. If not set via PowerShell parameter processing, will
@@ -27,21 +21,26 @@ namespace Google.PowerShell.PubSub
         [ConfigPropertyName(CloudSdkSettings.CommonProperties.Project)]
         public string Project { get; set; }
 
-        [Parameter(Mandatory = false, Position = 0, ParameterSetName = ParameterSetNames.Default)]
+        [Parameter(Mandatory = false, Position = 0)]
         [ValidateNotNullOrEmpty]
         [Alias("Name")]
         public string[] Subscription { get; set; }
 
-        [Parameter(Mandatory = true, ParameterSetName = ParameterSetNames.ByTopic)]
+        [Parameter(Mandatory = true)]
         [ValidateNotNullOrEmpty]
         public string Topic { get; set; }
 
         protected override void ProcessRecord()
         {
+            if (Subscription != null)
+            {
+                Subscription = Subscription.Select(item => PrefixProjectToSubscription(item, Project)).ToArray();
+            }
+
             // Handles the case where user wants to list all subscriptions in a particular topic.
             // In this case, we will have to make a call to get the name of all the subscription in that topic
             // before calling get request.
-            if (ParameterSetName == ParameterSetNames.ByTopic)
+            if (Topic != null)
             {
                 Topic = PrefixProjectToTopic(Topic, Project);
                 ProjectsResource.TopicsResource.SubscriptionsResource.ListRequest listRequest =
@@ -51,7 +50,16 @@ namespace Google.PowerShell.PubSub
                     ListTopicSubscriptionsResponse response = listRequest.Execute();
                     if (response.Subscriptions != null)
                     {
-                        GetSubscriptions(response.Subscriptions);
+                        if (Subscription != null)
+                        {
+                            IEnumerable<string> selectedSubscriptions = response.Subscriptions
+                                .Where(sub => Subscription.Contains(sub, System.StringComparer.OrdinalIgnoreCase));
+                            GetSubscriptions(selectedSubscriptions);
+                        }
+                        else
+                        {
+                            GetSubscriptions(response.Subscriptions);
+                        }
                     }
                     listRequest.PageToken = response.NextPageToken;
                 }
